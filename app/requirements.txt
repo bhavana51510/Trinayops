@@ -1,0 +1,12 @@
+# ============================================================
+# requirements.txt — Your app's ingredient list
+# ============================================================
+# When someone installs your app, Python reads this file and
+# downloads everything listed here automatically.
+# Like a recipe card — "to make this dish you need these."
+# ============================================================
+
+flask==3.0.3          # the web framework
+psutil==5.9.8         # reads CPU and memory stats
+gunicorn==22.0.0      # production web server (replaces flask's dev server)
+requests==2.32.3      # makes HTTP calls (used by simulation engine)

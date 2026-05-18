@@ -1,0 +1,163 @@
+# ============================================================
+# GitHub Actions Workflow — Your Automated Delivery Driver
+# ============================================================
+# This file tells GitHub: "Every time code is pushed,
+# automatically run these steps in this exact order."
+#
+# File MUST live at: .github/workflows/pipeline.yml
+# GitHub looks for it there automatically.
+# ============================================================
+
+name: TrinayOps — CI/CD Pipeline
+
+# ============================================================
+# TRIGGER: When does this pipeline run?
+# ============================================================
+on:
+  push:
+    branches:
+      - main        # runs when you push to main branch
+      - develop     # runs when you push to develop branch
+  pull_request:
+    branches:
+      - main        # runs when someone opens a PR to main
+
+# ============================================================
+# ENVIRONMENT VARIABLES
+# Available to every step below.
+# Secrets (like passwords) are stored in GitHub Settings →
+# Secrets — never hardcode passwords in this file.
+# ============================================================
+env:
+  IMAGE_NAME: trinayops
+  IMAGE_TAG:  ${{ github.sha }}   # unique ID of this specific commit
+
+# ============================================================
+# JOBS: The actual pipeline steps
+# ============================================================
+jobs:
+
+  # ----------------------------------------------------------
+  # JOB 1: Build & Test
+  # Builds the Docker image and runs basic tests
+  # ----------------------------------------------------------
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest   # GitHub gives us a free Linux machine
+
+    steps:
+
+      # Step 1: Download your code onto the GitHub machine
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Python so we can run our scripts
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Step 3: Install test dependencies
+      - name: Install test dependencies
+        run: |
+          pip install pytest requests flask psutil
+
+      # Step 4: Run basic app tests
+      - name: Run tests
+        run: |
+          cd app
+          python -m pytest ../tests/ -v --tb=short
+        env:
+          APP_ENV: testing
+          PORT: 5000
+          SECRET_KEY: test-secret-key
+
+      # Step 5: Build the Docker image
+      # This packs your app into the lunchbox
+      - name: Build Docker image
+        run: |
+          cd app
+          docker build -t ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
+          docker tag ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} ${{ env.IMAGE_NAME }}:latest
+          echo "✅ Docker image built successfully"
+
+      # Step 6: Run the Simulation Engine
+      # This is YOUR innovation — the smart inspector runs here
+      # before any deployment decision is made
+      - name: Run Simulation Engine
+        run: |
+          cd simulation
+          pip install requests psutil
+          python simulation_engine.py
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          APP_PORT:   5000
+          APP_ENV:    production
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          PORT:       5000
+
+      # Step 7: Upload the simulation report as an artifact
+      # So you can download and read it after the pipeline runs
+      - name: Upload simulation report
+        uses: actions/upload-artifact@v4
+        if: always()   # upload even if simulation failed
+        with:
+          name: simulation-report-${{ github.sha }}
+          path: simulation/simulation_report.json
+
+  # ----------------------------------------------------------
+  # JOB 2: Deploy
+  # Only runs if Job 1 passed (simulation approved the deploy)
+  # "needs: build-and-test" = wait for Job 1 to finish first
+  # ----------------------------------------------------------
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build-and-test   # ← only runs if simulation PASSED
+
+    # Only deploy on pushes to main (not on PRs or develop)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Log in to Docker Hub to push the image
+      # DOCKER_USERNAME and DOCKER_PASSWORD stored in GitHub Secrets
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Build and push the final production image
+      - name: Build and push production image
+        run: |
+          cd app
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest .
+          docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          echo "✅ Image pushed to Docker Hub"
+
+      # Notify Slack that deployment succeeded
+      # SLACK_WEBHOOK stored in GitHub Secrets
+      - name: Notify Slack — Deploy Success
+        if: success()
+        run: |
+          curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
+          -H 'Content-type: application/json' \
+          --data '{
+            "text": "✅ *TrinayOps* deployed successfully!\nCommit: `${{ github.sha }}`\nBranch: `${{ github.ref_name }}`\nTriggered by: ${{ github.actor }}"
+          }'
+
+      # Notify Slack if deployment FAILED
+      - name: Notify Slack — Deploy Failed
+        if: failure()
+        run: |
+          curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
+          -H 'Content-type: application/json' \
+          --data '{
+            "text": "🚫 *TrinayOps* deployment BLOCKED!\nCommit: `${{ github.sha }}`\nReason: Simulation engine blocked this deployment.\nCheck the simulation report artifact for details."
+          }'
