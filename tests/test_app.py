@@ -26,7 +26,7 @@ def test_home_route(client):
     response = client.get("/")
     assert response.status_code == 200
     data = response.get_json()
-    assert data["service"] == "Container Champion X"
+    assert data["service"] == "Trinayops"
     assert "version" in data
     print("  ✅ Home route works")
 
